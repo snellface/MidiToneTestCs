@@ -1,4 +1,6 @@
-﻿using System;
+﻿using MidiToWavWinForm;
+using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
@@ -9,37 +11,18 @@ using System.Media;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using System.Buffers.Binary;
-
 
 namespace MidiToWavWinForm
 {
-	public static class BinaryReaderExtensions
+	public partial class MainForm : Form
 	{
-		public static int ReadVariableLengthValue(this BinaryReader reader)
-		{
-			int value = 0;
-			for(int i = 0; i < 4; i++)
-			{
-				byte data = reader.ReadByte();
-				byte dataWithoutMarkerBit = (byte)(data & 0b01111111);
-				value += dataWithoutMarkerBit; // Mask away any "more data" bits, shift in this masked data
-
-				if ((data & 0b10000000) == 0)
-					break;
-
-				value = value << 7;
-			}
-			return value;
-		}
-	}
-
-	public partial class Form1 : Form
-	{
-		public Form1()
+		public MainForm()
 		{
 			InitializeComponent();
+		}
 
+		private void RunTest()
+		{
 			var waveStream = new MemoryStream();
 			var waveWriter = new BinaryWriter(waveStream);
 
@@ -47,48 +30,48 @@ namespace MidiToWavWinForm
 			double[] midiFrequency = Enumerable.Range(0, 127).Select(x => 440.0 * Math.Pow(2, ((x - 69.0) / 12.0))).ToArray();
 			ushort[] midiFrequencyVolumes = new ushort[midiFrequency.Length];
 
-			var samples1 = GenerateWaveSamples(440, 2000);
-			var samples2 = GenerateWaveSamples(540, 2000);
-			var compositeSamples = samples1.Select((v, i) => (v + samples2[i])).ToArray();
+			//var samples1 = GenerateWaveSamples(440, 2000);
+			//var samples2 = GenerateWaveSamples(540, 2000);
+			//var compositeSamples = samples1.Select((v, i) => (v + samples2[i])).ToArray();
 
-			const int samplesPerPixel = 10;
-			Bitmap bmp = new Bitmap(samples1.Length / samplesPerPixel, 600);
-			Graphics g = Graphics.FromImage(bmp);
-			g.Clear(Color.White);
+			//const int samplesPerPixel = 10;
+			//Bitmap bmp = new Bitmap(samples1.Length / samplesPerPixel, 600);
+			//Graphics g = Graphics.FromImage(bmp);
+			//g.Clear(Color.White);
 
-			double maxValue = samples1.Max(s => Math.Abs(s));
-			maxValue = Math.Max(maxValue, samples2.Max(s => Math.Abs(s)));
-			maxValue = Math.Max(maxValue, compositeSamples.Max(s => Math.Abs(s)));
+			//double maxValue = samples1.Max(s => Math.Abs(s));
+			//maxValue = Math.Max(maxValue, samples2.Max(s => Math.Abs(s)));
+			//maxValue = Math.Max(maxValue, compositeSamples.Max(s => Math.Abs(s)));
 
-			for (int i = 0; i < samples1.Length; i++)
-			{
-				waveWriter.Write(samples1[i]);
-			}
-			for (int i = 0; i < samples1.Length; i++)
-			{
-				waveWriter.Write(samples2[i]);
-			}
+			//for (int i = 0; i < samples1.Length; i++)
+			//{
+			//	waveWriter.Write(samples1[i]);
+			//}
+			//for (int i = 0; i < samples1.Length; i++)
+			//{
+			//	waveWriter.Write(samples2[i]);
+			//}
 
-			for (int i = 0; i < samples1.Length; i++)
-			{
-				int y = 100 - (int)(samples1[i] / maxValue * 100.0);
-				g.FillRectangle(Brushes.Red, i / samplesPerPixel, y, 1, 1);
+			//for (int i = 0; i < samples1.Length; i++)
+			//{
+			//	int y = 100 - (int)(samples1[i] / maxValue * 100.0);
+			//	g.FillRectangle(Brushes.Red, i / samplesPerPixel, y, 1, 1);
 
-				y = 100 - (int)(samples2[i] / maxValue * 100.0);
-				g.FillRectangle(Brushes.Green, i / samplesPerPixel, y + 200, 1, 1);
+			//	y = 100 - (int)(samples2[i] / maxValue * 100.0);
+			//	g.FillRectangle(Brushes.Green, i / samplesPerPixel, y + 200, 1, 1);
 
-				y = 100 - (int)(compositeSamples[i] / maxValue * 100.0);
-				g.FillRectangle(Brushes.Black, i / samplesPerPixel, y + 400, 1, 1);
+			//	y = 100 - (int)(compositeSamples[i] / maxValue * 100.0);
+			//	g.FillRectangle(Brushes.Black, i / samplesPerPixel, y + 400, 1, 1);
 
-				waveWriter.Write(compositeSamples[i]);
-			}
+			//	waveWriter.Write(compositeSamples[i]);
+			//}
 
-			bmp.Save("Waveform.bmp");
-			g.Dispose();
-			bmp.Dispose();
+			//bmp.Save("Waveform.bmp");
+			//g.Dispose();
+			//bmp.Dispose();
 
 
-			const bool LoadMidi = false;
+			const bool LoadMidi = true;
 			if (LoadMidi)
 			{
 				using (FileStream fs = new FileStream("Twinkle.mid", FileMode.Open))
@@ -408,6 +391,19 @@ namespace MidiToWavWinForm
 					stream.Seek(0, SeekOrigin.Begin);
 					new SoundPlayer(stream).Play();
 				}
+			}
+		}
+
+		private void timer1_Tick(object sender, EventArgs e)
+		{
+			timer1.Stop();
+			try
+			{ 
+				RunTest();
+			}
+			catch (Exception ex)
+			{
+				MessageBox.Show($"Something bad happened: {ex}");
 			}
 		}
 	}
