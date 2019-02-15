@@ -13,16 +13,6 @@ using System.Buffers.Binary;
 
 namespace MidiToWavWinForm
 {
-	//public static class BinaryReaderExtensions
-	//{
-	//	public static short ReadInt16_MSBFirst(this BinaryReader reader)
-	//	{
-	//		byte[] bytes = BitConverter.GetBytes(reader.);
-	//		// Swap byte order
-	//		uint b = BitConverter.ToUInt32(new byte[] { bytes[3], bytes[2], bytes[1], bytes[0] }, 0);
-	//	}
-	//}
-
 	public static class BinaryReaderExtensions
 	{
 		public static int ReadVariableLengthValue(this BinaryReader reader)
@@ -45,18 +35,16 @@ namespace MidiToWavWinForm
 
 	public partial class Form1 : Form
 	{
-		public struct ToneData
-		{
-			public ushort Frequency { get; set; }
-			public ushort Volume { get; set; }
-		}
-
 		public Form1()
 		{
 			InitializeComponent();
 
 			var waveStream = new MemoryStream();
 			var waveWriter = new BinaryWriter(waveStream);
+
+			// From http://subsynth.sourceforge.net/midinote2freq.html and corrected via formula from https://en.wikipedia.org/wiki/MIDI_tuning_standard
+			double[] midiFrequency = Enumerable.Range(0, 127).Select(x => 440.0 * Math.Pow(2, ((x - 69.0) / 12.0))).ToArray();
+			ushort[] midiFrequencyVolumes = new ushort[midiFrequency.Length];
 
 			using (FileStream fs = new FileStream("Twinkle.mid", FileMode.Open))
 			{
@@ -72,6 +60,10 @@ namespace MidiToWavWinForm
 					short fileType = BinaryPrimitives.ReverseEndianness(reader.ReadInt16());
 					short trackCount = BinaryPrimitives.ReverseEndianness(reader.ReadInt16());
 					short ticksPerQuarterNote = BinaryPrimitives.ReverseEndianness(reader.ReadInt16()); // aka time division
+
+					int microsecondsPerBeat = 500000;
+					int microsecondsPerOffset = microsecondsPerBeat / ticksPerQuarterNote;
+
 					int headerRead = 6;
 					while (headerRead < headerSize)
 						reader.ReadByte();
@@ -85,7 +77,6 @@ namespace MidiToWavWinForm
 					// Read "normal" tracks
 					for (; trackIndex < trackCount; trackIndex++)
 					{
-						var activeTones = new List<ToneData>();
 						int MTrk = BinaryPrimitives.ReverseEndianness(reader.ReadInt32()); //0x4d54726b
 						if (MTrk != 0x4d54726b)
 							throw new Exception("Invalid midi track header");
@@ -93,10 +84,26 @@ namespace MidiToWavWinForm
 						int bytesInTrack = BinaryPrimitives.ReverseEndianness(reader.ReadInt32());
 						bool runningStatus = false;
 						long runningOffset = 0;
+						long lastRunningOffset = 0;
 						while (true)
 						{
 							int offset = reader.ReadVariableLengthValue();
 							runningOffset += offset;
+							if(offset != 0)
+							{
+								// Add sounds to wave buffer
+								for(int i = 0; i < midiFrequencyVolumes.Length; i++)
+								{
+									int offsetAsMs = (microsecondsPerOffset * offset) / 1000;
+									if (midiFrequencyVolumes.Count(v => v > 0) > 1)
+										throw new Exception("Mixing sounds not yet supported.");
+									if(midiFrequencyVolumes[i] > 0)
+									{
+										AddWaveData(waveWriter, (ushort)midiFrequency[i], offsetAsMs, midiFrequencyVolumes[i]);
+										break;
+									}
+								}
+							}
 
 							byte operationByte = reader.ReadByte();
 							if(operationByte == 0xff)
@@ -107,6 +114,19 @@ namespace MidiToWavWinForm
 								int length = reader.ReadVariableLengthValue();
 								for (int i = 0; i < length; i++)
 									reader.ReadByte();
+
+								if (type == 0x51)
+								{
+									// Set tempo meta message
+
+									if (length != 3)
+										throw new Exception("Unexpected length of Set Tempo message.");
+
+									byte[] tempo = reader.ReadBytes(3); // 24 bit value, MSB first as usual?
+									throw new Exception("Demo track did not have this message, assume that this implementation is WRONG");
+									microsecondsPerBeat = tempo[0] + (tempo[1] << 8) + (tempo[2] << 16);
+									microsecondsPerOffset = microsecondsPerBeat / ticksPerQuarterNote;
+								}
 
 								if(type == 0x2F)
 								{
@@ -132,26 +152,24 @@ namespace MidiToWavWinForm
 							byte param1 = reader.ReadByte();
 							byte param2 = reader.ReadByte();
 
-							ushort freq = 0;
-
 							switch (eventType)
 							{
 								case 0x80:
 									// Note Off
 									System.Diagnostics.Debug.WriteLine($"@ {runningOffset}: Off note: {param1}");
-									activeTones.RemoveAll(t => t.Frequency == freq);
+									midiFrequencyVolumes[param1] = 0;
 									break;
 								case 0x90:
 									// Note On
 									if (param2 != 0)
 									{
 										System.Diagnostics.Debug.WriteLine($"@ {runningOffset}: On note: {param1}");
-										activeTones.Add(new ToneData() { Frequency = freq, Volume = 16383 });
+										midiFrequencyVolumes[param1] = 16383;
 									}
 									else
 									{
 										System.Diagnostics.Debug.WriteLine($"@ {runningOffset}: Off note: {param1}");
-										activeTones.RemoveAll(t => t.Frequency == freq);
+										midiFrequencyVolumes[param1] = 0;
 									}
 									break;
 								case 0xA0:
