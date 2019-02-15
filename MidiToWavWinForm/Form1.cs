@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Buffers.Binary;
 
+
 namespace MidiToWavWinForm
 {
 	public static class BinaryReaderExtensions
@@ -46,138 +47,183 @@ namespace MidiToWavWinForm
 			double[] midiFrequency = Enumerable.Range(0, 127).Select(x => 440.0 * Math.Pow(2, ((x - 69.0) / 12.0))).ToArray();
 			ushort[] midiFrequencyVolumes = new ushort[midiFrequency.Length];
 
-			using (FileStream fs = new FileStream("Twinkle.mid", FileMode.Open))
+			var samples1 = GenerateWaveSamples(440, 2000);
+			var samples2 = GenerateWaveSamples(540, 2000);
+			var compositeSamples = samples1.Select((v, i) => (v + samples2[i])).ToArray();
+
+			const int samplesPerPixel = 10;
+			Bitmap bmp = new Bitmap(samples1.Length / samplesPerPixel, 600);
+			Graphics g = Graphics.FromImage(bmp);
+			g.Clear(Color.White);
+
+			double maxValue = samples1.Max(s => Math.Abs(s));
+			maxValue = Math.Max(maxValue, samples2.Max(s => Math.Abs(s)));
+			maxValue = Math.Max(maxValue, compositeSamples.Max(s => Math.Abs(s)));
+
+			for (int i = 0; i < samples1.Length; i++)
 			{
-				using (BinaryReader reader = new BinaryReader(fs))
+				waveWriter.Write(samples1[i]);
+			}
+			for (int i = 0; i < samples1.Length; i++)
+			{
+				waveWriter.Write(samples2[i]);
+			}
+
+			for (int i = 0; i < samples1.Length; i++)
+			{
+				int y = 100 - (int)(samples1[i] / maxValue * 100.0);
+				g.FillRectangle(Brushes.Red, i / samplesPerPixel, y, 1, 1);
+
+				y = 100 - (int)(samples2[i] / maxValue * 100.0);
+				g.FillRectangle(Brushes.Green, i / samplesPerPixel, y + 200, 1, 1);
+
+				y = 100 - (int)(compositeSamples[i] / maxValue * 100.0);
+				g.FillRectangle(Brushes.Black, i / samplesPerPixel, y + 400, 1, 1);
+
+				waveWriter.Write(compositeSamples[i]);
+			}
+
+			bmp.Save("Waveform.bmp");
+			g.Dispose();
+			bmp.Dispose();
+
+
+			const bool LoadMidi = false;
+			if (LoadMidi)
+			{
+				using (FileStream fs = new FileStream("Twinkle.mid", FileMode.Open))
 				{
-					// Read MIDI header
-					// Skip MThd string
-					int MThd = BinaryPrimitives.ReverseEndianness(reader.ReadInt32()); //0x4d546864
-					if (MThd != 0x4d546864)
-						throw new Exception("Invalid midi file header");
-
-					int headerSize = BinaryPrimitives.ReverseEndianness(reader.ReadInt32());
-					short fileType = BinaryPrimitives.ReverseEndianness(reader.ReadInt16());
-					short trackCount = BinaryPrimitives.ReverseEndianness(reader.ReadInt16());
-					short ticksPerQuarterNote = BinaryPrimitives.ReverseEndianness(reader.ReadInt16()); // aka time division
-
-					int microsecondsPerBeat = 500000;
-					int microsecondsPerOffset = microsecondsPerBeat / ticksPerQuarterNote;
-
-					int headerRead = 6;
-					while (headerRead < headerSize)
-						reader.ReadByte();
-
-					int trackIndex = 0;
-					if (fileType == 1)
+					using (BinaryReader reader = new BinaryReader(fs))
 					{
-						// read first metadata track
-						trackIndex = 1;
-					}
-					// Read "normal" tracks
-					for (; trackIndex < trackCount; trackIndex++)
-					{
-						int MTrk = BinaryPrimitives.ReverseEndianness(reader.ReadInt32()); //0x4d54726b
-						if (MTrk != 0x4d54726b)
-							throw new Exception("Invalid midi track header");
+						// Read MIDI header
+						// Skip MThd string
+						int MThd = BinaryPrimitives.ReverseEndianness(reader.ReadInt32()); //0x4d546864
+						if (MThd != 0x4d546864)
+							throw new Exception("Invalid midi file header");
 
-						int bytesInTrack = BinaryPrimitives.ReverseEndianness(reader.ReadInt32());
-						bool runningStatus = false;
-						long runningOffset = 0;
-						long lastRunningOffset = 0;
-						while (true)
+						int headerSize = BinaryPrimitives.ReverseEndianness(reader.ReadInt32());
+						short fileType = BinaryPrimitives.ReverseEndianness(reader.ReadInt16());
+						short trackCount = BinaryPrimitives.ReverseEndianness(reader.ReadInt16());
+						short ticksPerQuarterNote = BinaryPrimitives.ReverseEndianness(reader.ReadInt16()); // aka time division
+
+						int microsecondsPerBeat = 500000;
+						int microsecondsPerOffset = microsecondsPerBeat / ticksPerQuarterNote;
+
+						int headerRead = 6;
+						while (headerRead < headerSize)
+							reader.ReadByte();
+
+						int trackIndex = 0;
+						if (fileType == 1)
 						{
-							int offset = reader.ReadVariableLengthValue();
-							runningOffset += offset;
-							if(offset != 0)
+							// read first metadata track
+							trackIndex = 1;
+						}
+						// Read "normal" tracks
+						for (; trackIndex < trackCount; trackIndex++)
+						{
+							int MTrk = BinaryPrimitives.ReverseEndianness(reader.ReadInt32()); //0x4d54726b
+							if (MTrk != 0x4d54726b)
+								throw new Exception("Invalid midi track header");
+
+							int bytesInTrack = BinaryPrimitives.ReverseEndianness(reader.ReadInt32());
+							bool runningStatus = false;
+							long runningOffset = 0;
+							long lastRunningOffset = 0;
+							while (true)
 							{
-								// Add sounds to wave buffer
-								for(int i = 0; i < midiFrequencyVolumes.Length; i++)
+								int offset = reader.ReadVariableLengthValue();
+								runningOffset += offset;
+								if (offset != 0)
 								{
-									int offsetAsMs = (microsecondsPerOffset * offset) / 1000;
-									if (midiFrequencyVolumes.Count(v => v > 0) > 1)
-										throw new Exception("Mixing sounds not yet supported.");
-									if(midiFrequencyVolumes[i] > 0)
+									// Add sounds to wave buffer
+									for (int i = 0; i < midiFrequencyVolumes.Length; i++)
 									{
-										AddWaveData(waveWriter, (ushort)midiFrequency[i], offsetAsMs, midiFrequencyVolumes[i]);
+										int offsetAsMs = (microsecondsPerOffset * offset) / 1000;
+										if (midiFrequencyVolumes.Count(v => v > 0) > 1)
+											throw new Exception("Mixing sounds not yet supported.");
+										if (midiFrequencyVolumes[i] > 0)
+										{
+											AddWaveData(waveWriter, (ushort)midiFrequency[i], offsetAsMs, midiFrequencyVolumes[i]);
+											break;
+										}
+									}
+								}
+
+								byte operationByte = reader.ReadByte();
+								if (operationByte == 0xff)
+								{
+									// I dont think meta events cancels runningStatus.
+									// Meta event
+									byte type = reader.ReadByte();
+									int length = reader.ReadVariableLengthValue();
+									for (int i = 0; i < length; i++)
+										reader.ReadByte();
+
+									if (type == 0x51)
+									{
+										// Set tempo meta message
+
+										if (length != 3)
+											throw new Exception("Unexpected length of Set Tempo message.");
+
+										byte[] tempo = reader.ReadBytes(3); // 24 bit value, MSB first as usual?
+										throw new Exception("Demo track did not have this message, assume that this implementation is WRONG");
+										microsecondsPerBeat = tempo[0] + (tempo[1] << 8) + (tempo[2] << 16);
+										microsecondsPerOffset = microsecondsPerBeat / ticksPerQuarterNote;
+									}
+
+									if (type == 0x2F)
+									{
+										// End of track
 										break;
 									}
+
+									continue;
 								}
-							}
 
-							byte operationByte = reader.ReadByte();
-							if(operationByte == 0xff)
-							{
-								// I dont think meta events cancels runningStatus.
-								// Meta event
-								byte type = reader.ReadByte();
-								int length = reader.ReadVariableLengthValue();
-								for (int i = 0; i < length; i++)
-									reader.ReadByte();
-
-								if (type == 0x51)
+								if (operationByte == 0xf0 || operationByte == 0xf7)
 								{
-									// Set tempo meta message
-
-									if (length != 3)
-										throw new Exception("Unexpected length of Set Tempo message.");
-
-									byte[] tempo = reader.ReadBytes(3); // 24 bit value, MSB first as usual?
-									throw new Exception("Demo track did not have this message, assume that this implementation is WRONG");
-									microsecondsPerBeat = tempo[0] + (tempo[1] << 8) + (tempo[2] << 16);
-									microsecondsPerOffset = microsecondsPerBeat / ticksPerQuarterNote;
+									runningStatus = false;
+									// System Exclusive Event
+									int length = reader.ReadVariableLengthValue();
+									for (int i = 0; i < length; i++)
+										reader.ReadByte();
+									continue;
 								}
 
-								if(type == 0x2F)
+								byte eventType = (byte)(operationByte & 0xF0);
+								byte midiChannel = (byte)(operationByte & 0x0F);
+								byte param1 = reader.ReadByte();
+								byte param2 = reader.ReadByte();
+
+								switch (eventType)
 								{
-									// End of track
-									break;
-								}
-
-								continue;
-							}
-
-							if (operationByte == 0xf0 || operationByte == 0xf7)
-							{
-								runningStatus = false;
-								// System Exclusive Event
-								int length = reader.ReadVariableLengthValue();
-								for (int i = 0; i < length; i++)
-									reader.ReadByte();
-								continue;
-							}
-
-							byte eventType = (byte)(operationByte & 0xF0);
-							byte midiChannel = (byte)(operationByte & 0x0F);
-							byte param1 = reader.ReadByte();
-							byte param2 = reader.ReadByte();
-
-							switch (eventType)
-							{
-								case 0x80:
-									// Note Off
-									System.Diagnostics.Debug.WriteLine($"@ {runningOffset}: Off note: {param1}");
-									midiFrequencyVolumes[param1] = 0;
-									break;
-								case 0x90:
-									// Note On
-									if (param2 != 0)
-									{
-										System.Diagnostics.Debug.WriteLine($"@ {runningOffset}: On note: {param1}");
-										midiFrequencyVolumes[param1] = 16383;
-									}
-									else
-									{
+									case 0x80:
+										// Note Off
 										System.Diagnostics.Debug.WriteLine($"@ {runningOffset}: Off note: {param1}");
 										midiFrequencyVolumes[param1] = 0;
-									}
-									break;
-								case 0xA0:
-									// Note Aftertouch
-									break;
-								case 0xB0:
-									// Note Controller
-									break;
+										break;
+									case 0x90:
+										// Note On
+										if (param2 != 0)
+										{
+											System.Diagnostics.Debug.WriteLine($"@ {runningOffset}: On note: {param1}");
+											midiFrequencyVolumes[param1] = 16383;
+										}
+										else
+										{
+											System.Diagnostics.Debug.WriteLine($"@ {runningOffset}: Off note: {param1}");
+											midiFrequencyVolumes[param1] = 0;
+										}
+										break;
+									case 0xA0:
+										// Note Aftertouch
+										break;
+									case 0xB0:
+										// Note Controller
+										break;
+								}
 							}
 						}
 					}
@@ -208,6 +254,26 @@ namespace MidiToWavWinForm
 				short s = (short)(amp * Math.Sin(theta * (double)step));
 				writer.Write(s);
 			}
+		}
+
+		private short[] GenerateWaveSamples(UInt16 frequency, int msDuration, UInt16 volume = 16383)
+		{
+			const double TAU = 2 * Math.PI;
+			const int samplesPerSecond = 44100;
+			int samples = (int)((decimal)samplesPerSecond * msDuration / 1000);
+			var waveData = new short[samples];
+
+			double theta = frequency * TAU / (double)samplesPerSecond;
+			// 'volume' is UInt16 with range 0 thru Uint16.MaxValue ( = 65 535)
+			// we need 'amp' to have the range of 0 thru Int16.MaxValue ( = 32 767)
+			double amp = volume >> 2; // so we simply set amp = volume / 2
+			for (int step = 0; step < samples; step++)
+			{
+				short s = (short)(amp * Math.Sin(theta * (double)step));
+				waveData[step] = s;
+			}
+
+			return waveData;
 		}
 
 		private byte[] CreateWaveFile(byte[] data)
